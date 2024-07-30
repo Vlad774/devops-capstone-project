@@ -1,140 +1,118 @@
-"""
-Account Service
+import unittest
+from flask import json
+from service import app, talisman
 
-This microservice handles the lifecycle of Accounts
-"""
+BASE_URL = "/accounts"
+HTTPS_ENVIRON = {'wsgi.url_scheme': 'https'}
 
-# pylint: disable=unused-import
-from flask import jsonify, request, make_response, abort, url_for   # noqa; F401
-from service.models import Account
-from service.common import status  # HTTP Status Codes
-from . import app  # Import Flask application
+class TestAccountRoutes(unittest.TestCase):
 
+    @classmethod
+    def setUpClass(cls):
+        """Run once before all tests"""
+        app.testing = True
+        cls.client = app.test_client()
+        # Disable forced HTTPS for testing
+        talisman.force_https = False
 
-############################################################
-# Health Endpoint
-############################################################
-@app.route("/health")
-def health():
-    """Health Status"""
-    return jsonify(dict(status="OK")), status.HTTP_200_OK
+    def test_health_check(self):
+        """Test the health check endpoint"""
+        resp = self.client.get('/health')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json['status'], 'OK')
 
+    def test_create_account(self):
+        """Test creating a new account"""
+        account_data = {
+            "name": "John Doe",
+            "email": "johndoe@example.com",
+            "address": "123 Elm Street",
+            "phone_number": "555-555-5555",
+            "date_joined": "2023-01-01"
+        }
+        resp = self.client.post('/accounts', json=account_data)
+        self.assertEqual(resp.status_code, 201)
+        self.assertIn('Location', resp.headers)
+        self.assertEqual(resp.json['name'], account_data['name'])
 
-######################################################################
-# GET INDEX
-######################################################################
-@app.route("/")
-def index():
-    """Root URL response"""
-    return (
-        jsonify(
-            name="Account REST API Service",
-            version="1.0",
-            # paths=url_for("list_accounts", _external=True),
-        ),
-        status.HTTP_200_OK,
-    )
+    def test_list_accounts(self):
+        """Test listing all accounts"""
+        resp = self.client.get('/accounts')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsInstance(resp.json, list)
 
+    def test_get_account(self):
+        """Test getting an account by id"""
+        # Create an account first
+        account_data = {
+            "name": "John Doe",
+            "email": "johndoe@example.com",
+            "address": "123 Elm Street",
+            "phone_number": "555-555-5555",
+            "date_joined": "2023-01-01"
+        }
+        create_resp = self.client.post('/accounts', json=account_data)
+        account_id = create_resp.json['id']
 
-######################################################################
-# CREATE A NEW ACCOUNT
-######################################################################
-@app.route("/accounts", methods=["POST"])
-def create_accounts():
-    """
-    Creates an Account
-    This endpoint will create an Account based on the data in the body that is posted
-    """
-    app.logger.info("Request to create an Account")
-    check_content_type("application/json")
-    account = Account()
-    account.deserialize(request.get_json())
-    account.create()
-    message = account.serialize()
-    # Uncomment once get_accounts has been implemented
-    # location_url = url_for("get_accounts", account_id=account.id, _external=True)
-    location_url = "/"  # Remove once get_accounts has been implemented
-    return make_response(
-        jsonify(message), status.HTTP_201_CREATED, {"Location": location_url}
-    )
+        # Get the account by id
+        resp = self.client.get(f'/accounts/{account_id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json['name'], account_data['name'])
 
+    def test_update_account(self):
+        """Test updating an account"""
+        # Create an account first
+        account_data = {
+            "name": "John Doe",
+            "email": "johndoe@example.com",
+            "address": "123 Elm Street",
+            "phone_number": "555-555-5555",
+            "date_joined": "2023-01-01"
+        }
+        create_resp = self.client.post('/accounts', json=account_data)
+        account_id = create_resp.json['id']
 
-######################################################################
-# LIST ALL ACCOUNTS
-######################################################################
-@app.route("/accounts", methods=["GET"])
-def list_accounts():
-    """
-    List all Accounts
-    This endpoint will list all Accounts
-    """
-    app.logger.info("Request to list Accounts")
-    accounts = Account.all()
-    account_list = [account.serialize() for account in accounts]
-    app.logger.info("Returning [%s] accounts", len(account_list))
-    return jsonify(account_list), status.HTTP_200_OK
+        # Update the account
+        updated_data = {
+            "name": "Jane Doe",
+            "email": "janedoe@example.com",
+            "address": "456 Maple Street",
+            "phone_number": "555-555-5556",
+            "date_joined": "2023-02-01"
+        }
+        resp = self.client.put(f'/accounts/{account_id}', json=updated_data)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json['name'], updated_data['name'])
 
+    def test_delete_account(self):
+        """Test deleting an account"""
+        # Create an account first
+        account_data = {
+            "name": "John Doe",
+            "email": "johndoe@example.com",
+            "address": "123 Elm Street",
+            "phone_number": "555-555-5555",
+            "date_joined": "2023-01-01"
+        }
+        create_resp = self.client.post('/accounts', json=account_data)
+        account_id = create_resp.json['id']
 
-######################################################################
-# READ AN ACCOUNT
-######################################################################
-@app.route("/accounts/<int:account_id>", methods=["GET"])
-def get_accounts(account_id):
-    """
-    Reads an Account
-    This endpoint will read an Account based on the account_id that is requested
-    """
-    app.logger.info("Request to read an Account with id: %s", account_id)
-    account = Account.find(account_id)
-    if not account:
-        abort(status.HTTP_404_NOT_FOUND, f"Account with id [{account_id}] could not be found.")
-    return account.serialize(), status.HTTP_200_OK
+        # Delete the account
+        resp = self.client.delete(f'/accounts/{account_id}')
+        self.assertEqual(resp.status_code, 204)
 
+    def test_root_url_security_headers(self):
+        """Test that the root URL returns security headers"""
+        resp = self.client.get('/', environ_overrides=HTTPS_ENVIRON)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('X-Frame-Options', resp.headers)
+        self.assertEqual(resp.headers['X-Frame-Options'], 'SAMEORIGIN')
+        self.assertIn('X-Content-Type-Options', resp.headers)
+        self.assertEqual(resp.headers['X-Content-Type-Options'], 'nosniff')
+        self.assertIn('Content-Security-Policy', resp.headers)
+        self.assertEqual(resp.headers['Content-Security-Policy'], "default-src 'self'; object-src 'none'")
+        self.assertIn('Referrer-Policy', resp.headers)
+        self.assertEqual(resp.headers['Referrer-Policy'], 'strict-origin-when-cross-origin')
 
-######################################################################
-# UPDATE AN EXISTING ACCOUNT
-######################################################################
-@app.route("/accounts/<int:account_id>", methods=["PUT"])
-def update_accounts(account_id):
-    """
-    Update an Account
-    This endpoint will update an Account based on the posted data
-    """
-    app.logger.info("Request to update an Account with id: %s", account_id)
-    account = Account.find(account_id)
-    if not account:
-        abort(status.HTTP_404_NOT_FOUND, f"Account with id [{account_id}] could not be found.")
-    account.deserialize(request.get_json())
-    account.update()
-    return account.serialize(), status.HTTP_200_OK
-
-
-######################################################################
-# DELETE AN ACCOUNT
-######################################################################
-@app.route("/accounts/<int:account_id>", methods=["DELETE"])
-def delete_accounts(account_id):
-    """
-    Delete an Account
-    This endpoint will delete an Account based on the account_id that is requested
-    """
-    app.logger.info("Request to delete an Account with id: %s", account_id)
-    account = Account.find(account_id)
-    if account:
-        account.delete()
-    return "", status.HTTP_204_NO_CONTENT
-
-
-######################################################################
-#  U T I L I T Y   F U N C T I O N S
-######################################################################
-def check_content_type(media_type):
-    """Checks that the media type is correct"""
-    content_type = request.headers.get("Content-Type")
-    if content_type and content_type == media_type:
-        return
-    app.logger.error("Invalid Content-Type: %s", content_type)
-    abort(
-        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-        f"Content-Type must be {media_type}",
-    )
+if __name__ == '__main__':
+    unittest.main()
